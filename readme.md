@@ -1,7 +1,7 @@
 # Клиент API лидов ЭБК
 ## Необходимые шаги для запуска
 
-1. Скачать архив со страницы https://github.com/AxelPAL/exbico-leads-uploader/releases исполняемый файл под свою операционную систему
+1. Скачать исполняемый файл со страницы https://github.com/AxelPAL/exbico-leads-uploader/releases под свою операционную систему
 2. Скачать следующие файлы и поместить их в директорию с исполняемым файлом:
 - [leads.csv](https://raw.githubusercontent.com/AxelPAL/exbico-leads-uploader/main/leads.csv)
 - [token.txt](https://raw.githubusercontent.com/AxelPAL/exbico-leads-uploader/main/token.txt)
