@@ -20,10 +20,8 @@ import (
 	"time"
 )
 
-const ExbicoLeadApiUrl = "http://exbico-leads.loc/supplier/v1/credit-lead"
+const ExbicoLeadApiUrl = "https://app.exbico.ru/api/leads/supplier/v1/credit-lead"
 const FileWithLeadsName = "leads.csv"
-
-//const FileWithLeadsName = "leads 2.csv"
 
 var apiUrl string
 var debugMode bool
@@ -42,8 +40,6 @@ type recordProcessingResult struct {
 	ErrorString string
 }
 
-// prod url: https://app.exbico.ru/api/leads/supplier/v1/credit-lead
-// local url: http://exbico-leads.loc/supplier/v1/credit-lead
 func main() {
 	if threads > 10 {
 		log.Fatal("Количество потоков должно быть не больше 10.")
@@ -66,16 +62,31 @@ func main() {
 	}
 
 	fmt.Println("Отправка данных...")
-	mutex := new(sync.Mutex)
-	wg.Add(threads)
-	for w := 1; w <= threads; w++ {
-		go worker(token, jobs, results, wg, bar, mutex)
+	maxHashMapLengthForWorker := len(records) / threads
+	chunkedHashMap := make(map[string]recordProcessingElement)
+	jobs.Range(func(k, v interface{}) bool {
+		element := v.(recordProcessingElement)
+		chunkedHashMap[fmt.Sprintf("%s", k)] = element
+		if len(chunkedHashMap) == maxHashMapLengthForWorker {
+			clonedHashMap := make(map[string]recordProcessingElement)
+			for key, value := range chunkedHashMap {
+				clonedHashMap[key] = value
+				delete(chunkedHashMap, key)
+			}
+			wg.Add(1)
+			go worker(clonedHashMap, token, results, wg, bar)
+		}
+		return true
+	})
+	if len(chunkedHashMap) > 0 {
+		wg.Add(1)
+		go worker(chunkedHashMap, token, results, wg, bar)
 	}
+
 	wg.Wait()
 	bar.Finish()
 	writeResults(fileLinesCount, results)
 	fileLinesCount, err = calcCsvFileLinesCount(outputFileName)
-	fmt.Println(fileLinesCount)
 }
 
 func addLeadToMap(record []string, jobs *sync.Map) {
@@ -89,10 +100,9 @@ func addLeadToMap(record []string, jobs *sync.Map) {
 	jobs.Store(uuidString, recordProcessingElement)
 }
 
-func worker(token string, jobs *sync.Map, results *sync.Map, wg *sync.WaitGroup, bar *pb.ProgressBar, mutex *sync.Mutex) {
+func worker(hashMap map[string]recordProcessingElement, token string, results *sync.Map, wg *sync.WaitGroup, bar *pb.ProgressBar) {
 	defer wg.Done()
-	jobs.Range(func(k, v interface{}) bool {
-		recordProcessingElement := v.(recordProcessingElement)
+	for key, recordProcessingElement := range hashMap {
 		if debugMode {
 			leadJson, _ := json.Marshal(recordProcessingElement.Lead)
 			fmt.Println(string(leadJson))
@@ -104,13 +114,9 @@ func worker(token string, jobs *sync.Map, results *sync.Map, wg *sync.WaitGroup,
 			Result:      result,
 			ErrorString: errorString,
 		}
-		jobs.Delete(k)
-		mutex.Lock()
-		results.Store(k, asyncResult)
-		mutex.Unlock()
+		results.Store(key, asyncResult)
 		bar.Increment()
-		return true
-	})
+	}
 }
 
 func writeResults(fileLinesCount int, results *sync.Map) {
