@@ -61,36 +61,21 @@ func main() {
 	results := new(sync.Map)
 	wg := new(sync.WaitGroup)
 
-	//wg.Add(len(records))
 	for _, record := range records {
 		addLeadToMap(record, jobs)
-		wg.Add(1)
 	}
 
 	fmt.Println("Отправка данных...")
 	mutex := new(sync.Mutex)
+	wg.Add(threads)
 	for w := 1; w <= threads; w++ {
 		go worker(token, jobs, results, wg, bar, mutex)
 	}
 	wg.Wait()
 	bar.Finish()
-	var counter1, counter2 int
-	results.Range(func(k, v interface{}) bool {
-		counter1++
-		return true
-	})
-	fmt.Println(counter1)
-	jobs.Range(func(k, v interface{}) bool {
-		counter2++
-		return true
-	})
-	fmt.Println(counter2)
-	if counter1 != counter2 {
-		log.Fatal("Not all the leads have been processed!")
-	}
-	//writeResults(fileLinesCount, results)
-	//fileLinesCount, err = calcCsvFileLinesCount(outputFileName)
-	//fmt.Println(fileLinesCount)
+	writeResults(fileLinesCount, results)
+	fileLinesCount, err = calcCsvFileLinesCount(outputFileName)
+	fmt.Println(fileLinesCount)
 }
 
 func addLeadToMap(record []string, jobs *sync.Map) {
@@ -102,6 +87,30 @@ func addLeadToMap(record []string, jobs *sync.Map) {
 		Lead:   lead,
 	}
 	jobs.Store(uuidString, recordProcessingElement)
+}
+
+func worker(token string, jobs *sync.Map, results *sync.Map, wg *sync.WaitGroup, bar *pb.ProgressBar, mutex *sync.Mutex) {
+	defer wg.Done()
+	jobs.Range(func(k, v interface{}) bool {
+		recordProcessingElement := v.(recordProcessingElement)
+		if debugMode {
+			leadJson, _ := json.Marshal(recordProcessingElement.Lead)
+			fmt.Println(string(leadJson))
+		}
+		errorString, result := sendLead(recordProcessingElement.Lead, token)
+		asyncResult := recordProcessingResult{
+			Record:      recordProcessingElement.Record,
+			Lead:        recordProcessingElement.Lead,
+			Result:      result,
+			ErrorString: errorString,
+		}
+		jobs.Delete(k)
+		mutex.Lock()
+		results.Store(k, asyncResult)
+		mutex.Unlock()
+		bar.Increment()
+		return true
+	})
 }
 
 func writeResults(fileLinesCount int, results *sync.Map) {
@@ -119,30 +128,6 @@ func writeResults(fileLinesCount int, results *sync.Map) {
 		return true
 	})
 	bar.Finish()
-}
-
-func worker(token string, jobs *sync.Map, results *sync.Map, wg *sync.WaitGroup, bar *pb.ProgressBar, mutex *sync.Mutex) {
-	jobs.Range(func(k, v interface{}) bool {
-		recordProcessingElement := v.(recordProcessingElement)
-		if debugMode {
-			leadJson, _ := json.Marshal(recordProcessingElement.Lead)
-			fmt.Println(string(leadJson))
-		}
-		errorString, result := sendLead(recordProcessingElement.Lead, token)
-		asyncResult := recordProcessingResult{
-			Record:      recordProcessingElement.Record,
-			Lead:        recordProcessingElement.Lead,
-			Result:      result,
-			ErrorString: errorString,
-		}
-		mutex.Lock()
-		results.Store(k, asyncResult)
-		wg.Done()
-		jobs.Delete(k)
-		bar.Increment()
-		mutex.Unlock()
-		return true
-	})
 }
 
 func writeHeadLineIntoOutputFile() {
