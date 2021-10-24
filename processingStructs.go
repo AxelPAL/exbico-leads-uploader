@@ -5,8 +5,9 @@ type recordProcessingElement struct {
 	Lead   Lead
 }
 type recordProcessingResult struct {
-	Record []string
-	Lead   Lead
-	Status string
-	Data   LeadSendingResponseData
+	Record  []string
+	Lead    Lead
+	Status  string
+	Data    LeadSendingResponseData
+	Message string
 }

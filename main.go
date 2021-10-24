@@ -97,12 +97,13 @@ func worker(hashMap map[string]recordProcessingElement, token string, results *s
 			leadJson, _ := json.Marshal(recordProcessingElement.Lead)
 			fmt.Println(string(leadJson))
 		}
-		status, data := sendLead(recordProcessingElement.Lead, token)
+		status, response := sendLead(recordProcessingElement.Lead, token)
 		asyncResult := recordProcessingResult{
-			Record: recordProcessingElement.Record,
-			Lead:   recordProcessingElement.Lead,
-			Status: status,
-			Data:   data,
+			Record:  recordProcessingElement.Record,
+			Lead:    recordProcessingElement.Lead,
+			Status:  status,
+			Data:    response.Data,
+			Message: response.Message,
 		}
 		results.Store(key, asyncResult)
 		bar.Increment()
@@ -127,6 +128,7 @@ func writeResults(fileLinesCount int, results *sync.Map) {
 			translateLeadStatus(leadStatus),
 			translateRejectionReason(rejectReason),
 			leadIdString,
+			recordProcessingResult.Message,
 		)
 		if err != nil {
 			if debugMode {
@@ -178,7 +180,7 @@ func applyTranslation(dictMap map[string]string, valueToTranslate string) string
 
 func writeHeadLineIntoOutputFile() {
 	headLine := []string{"Фамилия", "Имя", "Отчество", "Дата рождения", "Возраст", "Телефон", "E-mail", "Сумма кредита", "Срок кредита", "Регион", "Город", "Серия паспорта", "Номер паспорта", "Дата выдачи паспорта"}
-	err := writeResultCsv(headLine, "Результат отправки", "Лид принят", "Причина отбраковки лида", "ID лида")
+	err := writeResultCsv(headLine, "Результат отправки", "Лид принят", "Причина отбраковки лида", "ID лида", "Дополнительная информация по приёму лида")
 	if err != nil {
 		if debugMode {
 			log.Println(err)
@@ -192,10 +194,10 @@ func setOutputFileName() {
 	}
 }
 
-func writeResultCsv(record []string, leadSendingResult string, leadStatus string, rejectionReason string, leadId string) error {
+func writeResultCsv(record []string, leadSendingResult string, leadStatus string, rejectionReason string, leadId string, leadErrorsString string) error {
 	file, err := os.OpenFile(outputFileName, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	checkError("Cannot create file", err)
-	record = append(record, leadSendingResult, leadStatus, rejectionReason, leadId)
+	record = append(record, leadSendingResult, leadStatus, rejectionReason, leadId, leadErrorsString)
 	defer func(file *os.File) {
 		err := file.Close()
 		if err != nil {
@@ -265,7 +267,7 @@ func initToken() {
 func initFlags() {
 	apiUrlPointer := flag.String("apiUrl", ExbicoLeadApiUrl, "url of Exbico Lead Api")
 	debugModePointer := flag.Bool("debug", false, "enable debug mode")
-	threadsPointer := flag.Int("threads", 1, fmt.Sprintf("number of parallel threads (max=%d)", MaxThreadsCount))
+	threadsPointer := flag.Int("threads", 2, fmt.Sprintf("number of parallel threads (max=%d)", MaxThreadsCount))
 	flag.Parse()
 	apiUrl = *apiUrlPointer
 	debugMode = *debugModePointer
@@ -281,7 +283,7 @@ func formatDate(date string) string {
 	return t.Format("YYYY-MM-DD")
 }
 
-func sendLead(lead Lead, token string) (string, LeadSendingResponseData) {
+func sendLead(lead Lead, token string) (string, LeadSendingResponse) {
 	leadJson, _ := json.Marshal(lead)
 	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(leadJson))
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
@@ -308,17 +310,21 @@ func sendLead(lead Lead, token string) (string, LeadSendingResponseData) {
 		fmt.Println("response Body:", string(body))
 	}
 
-	return parseResponseBody(body)
+	return parseResponseBody(body, resp.StatusCode)
 }
 
-func parseResponseBody(body []byte) (string, LeadSendingResponseData) {
+func parseResponseBody(body []byte, statusCode int) (string, LeadSendingResponse) {
 	response := LeadSendingResponse{}
 
-	err := json.Unmarshal(body, &response)
-	if err != nil {
-		fmt.Println(err)
+	if statusCode == 200 {
+		err := json.Unmarshal(body, &response)
+		if err != nil && debugMode {
+			fmt.Println(err)
+		}
+	} else {
+		response.Status = "error"
 	}
-	return response.Status, response.Data
+	return response.Status, response
 }
 
 func readData(fileName string) ([][]string, error) {
