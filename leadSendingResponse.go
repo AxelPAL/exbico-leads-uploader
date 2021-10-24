@@ -3,6 +3,7 @@ package main
 type LeadSendingResponseData struct {
 	LeadStatus   string `json:"leadStatus"`
 	RejectReason string `json:"rejectReason"`
+	LeadId       int    `json:"leadId"`
 }
 type LeadSendingResponse struct {
 	Status  string                  `json:"status"`

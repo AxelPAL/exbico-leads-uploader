@@ -22,6 +22,7 @@ import (
 
 const ExbicoLeadApiUrl = "https://app.exbico.ru/api/leads/supplier/v1/credit-lead"
 const FileWithLeadsName = "leads.csv"
+const MaxThreadsCount = 10
 
 var apiUrl string
 var debugMode bool
@@ -29,20 +30,9 @@ var outputFileName string
 var threads int
 var token string
 
-type recordProcessingElement struct {
-	Record []string
-	Lead   Lead
-}
-type recordProcessingResult struct {
-	Record      []string
-	Lead        Lead
-	Result      string
-	ErrorString string
-}
-
 func main() {
-	if threads > 10 {
-		log.Fatal("Количество потоков должно быть не больше 10.")
+	if threads > MaxThreadsCount {
+		log.Fatal(fmt.Sprintf("Количество потоков должно быть не больше %d.", MaxThreadsCount))
 	}
 	records, err := readData(FileWithLeadsName)
 	if err != nil {
@@ -107,12 +97,12 @@ func worker(hashMap map[string]recordProcessingElement, token string, results *s
 			leadJson, _ := json.Marshal(recordProcessingElement.Lead)
 			fmt.Println(string(leadJson))
 		}
-		errorString, result := sendLead(recordProcessingElement.Lead, token)
+		status, data := sendLead(recordProcessingElement.Lead, token)
 		asyncResult := recordProcessingResult{
-			Record:      recordProcessingElement.Record,
-			Lead:        recordProcessingElement.Lead,
-			Result:      result,
-			ErrorString: errorString,
+			Record: recordProcessingElement.Record,
+			Lead:   recordProcessingElement.Lead,
+			Status: status,
+			Data:   data,
 		}
 		results.Store(key, asyncResult)
 		bar.Increment()
@@ -124,7 +114,20 @@ func writeResults(fileLinesCount int, results *sync.Map) {
 	bar := pb.StartNew(fileLinesCount)
 	results.Range(func(k, v interface{}) bool {
 		recordProcessingResult := v.(recordProcessingResult)
-		err := writeResultCsv(recordProcessingResult.Record, recordProcessingResult.ErrorString, recordProcessingResult.Result)
+		leadStatus := recordProcessingResult.Data.LeadStatus
+		rejectReason := recordProcessingResult.Data.RejectReason
+		leadId := recordProcessingResult.Data.LeadId
+		var leadIdString string
+		if leadId > 0 {
+			leadIdString = strconv.Itoa(recordProcessingResult.Data.LeadId)
+		}
+		err := writeResultCsv(
+			recordProcessingResult.Record,
+			translateResponseStatus(recordProcessingResult.Status),
+			translateLeadStatus(leadStatus),
+			translateRejectionReason(rejectReason),
+			leadIdString,
+		)
 		if err != nil {
 			if debugMode {
 				log.Println(err)
@@ -136,9 +139,46 @@ func writeResults(fileLinesCount int, results *sync.Map) {
 	bar.Finish()
 }
 
+func translateResponseStatus(status string) string {
+	dict := map[string]string{
+		"success": "Успех",
+		"fail":    "Ошибка данных",
+		"error":   "Ошибка сервера",
+	}
+
+	return applyTranslation(dict, status)
+}
+
+func translateLeadStatus(leadStatus string) string {
+	dict := map[string]string{
+		"inProgress": "Принят",
+		"rejected":   "Не принят",
+	}
+
+	return applyTranslation(dict, leadStatus)
+}
+
+func translateRejectionReason(rejectionReason string) string {
+	dict := map[string]string{
+		"isDouble": "Дубль",
+	}
+
+	return applyTranslation(dict, rejectionReason)
+}
+
+func applyTranslation(dictMap map[string]string, valueToTranslate string) string {
+	result := valueToTranslate
+	value, exists := dictMap[valueToTranslate]
+	if exists {
+		result = value
+	}
+
+	return result
+}
+
 func writeHeadLineIntoOutputFile() {
 	headLine := []string{"Фамилия", "Имя", "Отчество", "Дата рождения", "Возраст", "Телефон", "E-mail", "Сумма кредита", "Срок кредита", "Регион", "Город", "Серия паспорта", "Номер паспорта", "Дата выдачи паспорта"}
-	err := writeResultCsv(headLine, "Ошибка в данных лида", "Результат отправки")
+	err := writeResultCsv(headLine, "Результат отправки", "Лид принят", "Причина отбраковки лида", "ID лида")
 	if err != nil {
 		if debugMode {
 			log.Println(err)
@@ -152,10 +192,10 @@ func setOutputFileName() {
 	}
 }
 
-func writeResultCsv(record []string, errorString string, leadSendingResult string) error {
+func writeResultCsv(record []string, leadSendingResult string, leadStatus string, rejectionReason string, leadId string) error {
 	file, err := os.OpenFile(outputFileName, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	checkError("Cannot create file", err)
-	record = append(record, leadSendingResult, errorString)
+	record = append(record, leadSendingResult, leadStatus, rejectionReason, leadId)
 	defer func(file *os.File) {
 		err := file.Close()
 		if err != nil {
@@ -225,7 +265,7 @@ func initToken() {
 func initFlags() {
 	apiUrlPointer := flag.String("apiUrl", ExbicoLeadApiUrl, "url of Exbico Lead Api")
 	debugModePointer := flag.Bool("debug", false, "enable debug mode")
-	threadsPointer := flag.Int("threads", 2, "number of parallel threads (max=50)")
+	threadsPointer := flag.Int("threads", 1, fmt.Sprintf("number of parallel threads (max=%d)", MaxThreadsCount))
 	flag.Parse()
 	apiUrl = *apiUrlPointer
 	debugMode = *debugModePointer
@@ -241,7 +281,7 @@ func formatDate(date string) string {
 	return t.Format("YYYY-MM-DD")
 }
 
-func sendLead(lead Lead, token string) (string, string) {
+func sendLead(lead Lead, token string) (string, LeadSendingResponseData) {
 	leadJson, _ := json.Marshal(lead)
 	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(leadJson))
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
@@ -271,14 +311,14 @@ func sendLead(lead Lead, token string) (string, string) {
 	return parseResponseBody(body)
 }
 
-func parseResponseBody(body []byte) (string, string) {
+func parseResponseBody(body []byte) (string, LeadSendingResponseData) {
 	response := LeadSendingResponse{}
 
 	err := json.Unmarshal(body, &response)
 	if err != nil {
 		fmt.Println(err)
 	}
-	return response.Data.LeadStatus, response.Message
+	return response.Status, response.Data
 }
 
 func readData(fileName string) ([][]string, error) {
