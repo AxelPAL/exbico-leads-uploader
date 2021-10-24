@@ -26,6 +26,7 @@ const MaxThreadsCount = 10
 
 var apiUrl string
 var debugMode bool
+var leadFilePath string
 var outputFileName string
 var threads int
 var token string
@@ -34,11 +35,14 @@ func main() {
 	if threads > MaxThreadsCount {
 		log.Fatal(fmt.Sprintf("Количество потоков должно быть не больше %d.", MaxThreadsCount))
 	}
-	records, err := readData(FileWithLeadsName)
+	records, err := readData(leadFilePath)
 	if err != nil {
-		log.Fatal(err)
+		if debugMode {
+			log.Println(err)
+		}
+		log.Fatal("Файл с лидами имеет неправильный формат. Он должен быть в формате csv с разделителем `,`")
 	}
-	fileLinesCount, err := calcCsvFileLinesCount(FileWithLeadsName)
+	fileLinesCount, err := calcCsvFileLinesCount(leadFilePath)
 	bar := pb.StartNew(fileLinesCount)
 	setOutputFileName()
 	writeHeadLineIntoOutputFile()
@@ -77,6 +81,8 @@ func main() {
 	bar.Finish()
 	writeResults(fileLinesCount, results)
 	fileLinesCount, err = calcCsvFileLinesCount(outputFileName)
+
+	exitProgram()
 }
 
 func addLeadToMap(record []string, jobs *sync.Map) {
@@ -139,6 +145,7 @@ func writeResults(fileLinesCount int, results *sync.Map) {
 		return true
 	})
 	bar.Finish()
+	fmt.Println("Результат сохранён в файл " + outputFileName)
 }
 
 func translateResponseStatus(status string) string {
@@ -254,11 +261,13 @@ func init() {
 }
 
 func initToken() {
-	tokenFromFile, err := getToken()
-	if err != nil {
-		log.Fatal(err)
+	if token == "" {
+		tokenFromFile, err := getToken()
+		if err != nil {
+			log.Fatal(err)
+		}
+		token = tokenFromFile
 	}
-	token = tokenFromFile
 	if len(token) != 32 {
 		log.Fatal("Токен должен содержать ровно 32 символа (в файле token.txt)")
 	}
@@ -268,10 +277,14 @@ func initFlags() {
 	apiUrlPointer := flag.String("apiUrl", ExbicoLeadApiUrl, "url of Exbico Lead Api")
 	debugModePointer := flag.Bool("debug", false, "enable debug mode")
 	threadsPointer := flag.Int("threads", 2, fmt.Sprintf("number of parallel threads (max=%d)", MaxThreadsCount))
+	leadFilePathPointer := flag.String("leadFilePath", FileWithLeadsName, "path to csv-file with leads")
+	tokenPointer := flag.String("token", "", "token to Exbico Leads API")
 	flag.Parse()
 	apiUrl = *apiUrlPointer
 	debugMode = *debugModePointer
 	threads = *threadsPointer
+	leadFilePath = *leadFilePathPointer
+	token = *tokenPointer
 }
 
 func formatDate(date string) string {
@@ -393,4 +406,9 @@ func calcCsvFileLinesCount(fileName string) (int, error) {
 			return count, err
 		}
 	}
+}
+
+func exitProgram() {
+	fmt.Println("Нажмите клавишу Enter для завершения работы программы...")
+	_, _ = fmt.Scanln()
 }
