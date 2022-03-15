@@ -230,14 +230,16 @@ func checkError(message string, err error) {
 
 func prepareLead(record []string) Lead {
 	var lead = Lead{}
-	lead.Client.FirstName = record[0]
-	lead.Client.LastName = record[1]
+	lead.Client.LastName = record[0]
+	lead.Client.FirstName = record[1]
 	lead.Client.Patronymic = record[2]
 	if record[3] != "" {
 		lead.Client.BirthDate = formatDate(record[3])
 	}
-	age, _ := strconv.Atoi(record[4])
-	lead.Client.Age = age
+	if record[4] != "" {
+		age, _ := strconv.Atoi(record[4])
+		lead.Client.Age = age
+	}
 	lead.Client.Phone = record[5]
 	lead.Client.Email = record[6]
 	lead.Product.TypeId = "consumer"
@@ -354,7 +356,9 @@ func readData(fileName string) ([][]string, error) {
 	}(f)
 	r := csv.NewReader(f)
 	// skip first line
-	if _, err := r.Read(); err != nil {
+	firstLineRows, err := r.Read()
+	checkFileEncoding(firstLineRows)
+	if err != nil {
 		return [][]string{}, err
 	}
 	records, err := r.ReadAll()
@@ -363,6 +367,13 @@ func readData(fileName string) ([][]string, error) {
 	}
 
 	return records, nil
+}
+
+func checkFileEncoding(rows []string) {
+	if rows[0] != "Фамилия" {
+		log.Fatal("В файле leads.csv указана неверная кодировка. " +
+			"Необходимо преобразовать файл в кодировку UTF-8 без BOM.")
+	}
 }
 
 func getToken() (string, error) {
